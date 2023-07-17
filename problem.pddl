@@ -1,0 +1,26 @@
+(define
+	(problem polycraft_problem)
+	(:domain polycraft_generated)
+    (:objects 
+        agent - agent
+        bedrock - bedrock
+    )
+
+    (:init
+        (available air)
+        (available bedrock)
+        (available  wood)
+        (not (available sapling))
+        (not (has agent))
+        (not (has bedrock) )
+        (not (has wood) )
+        (not (has sapling) )
+        (not (has planks) )
+        (not (has chair) )
+        (not (has chair_parts) )
+        (not (has decoration) )
+        (next_to air)
+    )
+
+    (:goal (and (has wood))) 
+)

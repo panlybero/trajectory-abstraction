@@ -1,0 +1,3 @@
+*.pyc
+results/
+agent_model_plots/
