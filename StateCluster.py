@@ -8,6 +8,7 @@ from OnlineNearestCentroid import OnlineNearestCentroid
 class StateCluster(ABC):
     def __init__(self, state_description):
         self.state_description = state_description
+        self._is_stable = True
 
     @abstractmethod
     def calculate_step_probability(self, step):
@@ -28,16 +29,24 @@ class StateCluster(ABC):
     def add_invented_predicate(self, predicate):
         self.state_description.add_invented_predicate(predicate)
 
+    @property
+    def is_stable(self):
+        return self._is_stable
+
 
 class CategoricalStateCluster(StateCluster):
-    def __init__(self, state_description, n_actions):
+    def __init__(self, state_description, n_actions, stability_count=10):
         super().__init__(state_description)
         self.n_actions = n_actions
         self.counts = np.zeros(n_actions)
+        self._is_stable = False
+        self.stability_count = stability_count
 
     def calculate_step_probability(self, step):
-        _, _, action_index, _, _ = step
-        action_probabilities = self.counts / np.sum(self.counts)
+        _, _, action_index, _, _, _ = step
+
+        counts = self.counts + 1
+        action_probabilities = counts / np.sum(counts)
 
         return action_probabilities[action_index]
 
@@ -49,7 +58,7 @@ class CategoricalStateCluster(StateCluster):
         return next_action
 
     def update_distribution(self, step):
-        _, _, action_index, _, _ = step
+        _, _, action_index, _, _, _ = step
         self.counts[action_index] += 1
 
     @classmethod
@@ -92,14 +101,20 @@ class CategoricalStateCluster(StateCluster):
         c = self.counts+1
         return c/np.sum(c)
 
+    @property
+    def is_stable(self):
+        if np.sum(self.counts) > self.stability_count:
+            self._is_stable = True
+        return self._is_stable
+
     def cluster_str(self, actions):
         d = self.dist
-        vals = {actions[i]: d[i] for i in range(len(actions))}
+        vals = {actions[i]: f"{d[i]:0.2f}" for i in range(len(actions))}
         return f"CategoricalCluster({vals})"
 
 
 class StateDependentStateCluster(StateCluster):
-    def __init__(self, state_description, n_actions, memory_size=100, classifier_class=OnlineNearestCentroid):
+    def __init__(self, state_description, n_actions, memory_size=100, classifier_class=OnlineNearestCentroid, stability_count=10):
         super().__init__(state_description)
         self.n_actions = n_actions
         self.classifier = classifier_class(
@@ -214,3 +229,11 @@ class StateDependentStateCluster(StateCluster):
 
     def __repr__(self) -> str:
         return f"StateDependentCluster({self.state_description},{self.classifier})"
+
+    @property
+    def is_stable(self):
+        vals = list(self.classifier.class_counts.values())
+        if sum(vals) > 0:
+            self._is_stable = True
+
+        return self._is_stable

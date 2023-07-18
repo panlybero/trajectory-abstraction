@@ -1,14 +1,21 @@
+from copy import deepcopy
+
+
 class StateDescription:
     def __init__(self, predicates, invented_predicates=None):
         self.predicates = predicates
         if invented_predicates is None:
             self.invented_predicates = set()
+        else:
+            self.invented_predicates = set(invented_predicates)
 
     def subsumes(self, other):
         return set(self.predicates).issubset(other.predicates)
 
     def __eq__(self, other):
-        return set(self.predicates) == set(other.predicates)
+        s1 = set(self.predicates).union(self.invented_predicates)
+        s2 = set(other.predicates).union(other.invented_predicates)
+        return s1 == s2
 
     def to_conjunction_str(self):
         conj = f"(and {' '.join(self.predicates)})"
@@ -35,7 +42,7 @@ class StateDescription:
             invented_predicates_intersection.intersection_update(
                 state_desc.invented_predicates)
 
-        return cls(list(predicates_intersection))
+        return cls(list(predicates_intersection), list(invented_predicates_intersection))
 
     def get_applicable_generalizations(self, generalizations):
         applicable_generalizations = []
@@ -60,6 +67,15 @@ class StateDescription:
 
     def __repr__(self):
         return f"StateDescription(pred={self.predicates}, invented={self.invented_predicates})"
+
+    def compare_predicates(self, other):
+
+        return set(self.predicates) == set(other.predicates)
+
+    def copy(self):
+        p = deepcopy(self.predicates)
+        i = deepcopy(self.invented_predicates)
+        return StateDescription(p, i)
 
 
 class StateDescriptionFactory:

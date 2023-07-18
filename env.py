@@ -1,8 +1,9 @@
 import gym
 import numpy as np
 
+
 class GridWorldEnv(gym.Env):
-    def __init__(self, n,crafting_goal = 'chair', max_timesteps = 100):
+    def __init__(self, n, crafting_goal='chair', max_timesteps=100):
         super(GridWorldEnv, self).__init__()
 
         self.n = n
@@ -17,14 +18,16 @@ class GridWorldEnv(gym.Env):
             'planks': 0,
             'chair_parts': 0,
             'chair': 0,
-            'decoration':0
+            'decoration': 0,
+            'stick': 0
         }
 
         self.observation_space = gym.spaces.Dict({
             'distance_to_wood': gym.spaces.Box(low=0.0, high=n, shape=(8,), dtype=np.float32),
             'inventory': gym.spaces.Box(low=0, high=n, shape=(len(self.inventory),), dtype=np.float32)
         })
-        self.action_space = gym.spaces.Discrete(8)  # 4 navigation actions, 4 crafting action
+        # 4 navigation actions, 4 crafting action
+        self.action_space = gym.spaces.Discrete(9)
 
     def _scatter_wood(self):
         num_wood = np.random.randint(4, self.n**2 // 4)
@@ -63,14 +66,20 @@ class GridWorldEnv(gym.Env):
 
         return distances
 
-
     def _craft_planks(self):
         if self.inventory['wood'] >= 1:
             self.inventory['wood'] -= 1
             self.inventory['planks'] += 1
             return True
         return False
-    
+
+    def _craft_stick(self):
+        if self.inventory['planks'] >= 1:
+            self.inventory['planks'] -= 1
+            self.inventory['stick'] += 1
+            return True
+        return False
+
     def _craft_decoration(self):
         if self.inventory['planks'] >= 1:
             self.inventory['planks'] -= 1
@@ -103,7 +112,7 @@ class GridWorldEnv(gym.Env):
 
             # Check if there is an item to collect at the new position
             if new_pos in self.wood_positions:
-                
+
                 self.wood_positions.remove(new_pos)
                 self.inventory['wood'] += 1
                 self.world[new_pos[0], new_pos[1]] = 0
@@ -115,7 +124,7 @@ class GridWorldEnv(gym.Env):
         n = self.n
         world = self.world.copy()
         world = np.array([[str(int(x)) for x in row] for row in world])
-        
+
         agent_pos = self.agent_pos.copy()
 
         # Set the agent's position in the world grid
@@ -140,10 +149,9 @@ class GridWorldEnv(gym.Env):
 
     def step(self, action):
         self.timesteps += 1
-        reward = -1  
+        reward = -1
         if action < 4:  # Navigation actions (forward, back, left, right)
             success = self._navigate(action)
-            
 
         else:  # Crafting action
             if action == 4:  # Craft planks
@@ -154,7 +162,8 @@ class GridWorldEnv(gym.Env):
                 success = self._craft_chair()
             elif action == 7:  # Craft decoration
                 success = self._craft_decoration()
-            
+            elif action == 8:  # Craft stick
+                success = self._craft_stick()
 
         if self.inventory[self.crafting_goal] >= 1 or self.timesteps >= self.max_timesteps:
             done = True  # Episode termination is not implemented in this example
@@ -176,7 +185,8 @@ class GridWorldEnv(gym.Env):
             'planks': 0,
             'chair_parts': 0,
             'chair': 0,
-            'decoration':0
+            'decoration': 0,
+            'stick': 0
         }
 
         obs = self._get_observation()
