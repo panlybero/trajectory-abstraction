@@ -11,7 +11,7 @@ from state_description import describe_state
 
 
 class AgentModel:
-    def __init__(self, n_actions, possible_predicates, prob_threshold, merge_threshold, max_n_clusters=None, cluster_class=CategoricalStateCluster):
+    def __init__(self, n_actions, possible_predicates, prob_threshold, merge_threshold, max_n_clusters=None, cluster_class=CategoricalStateCluster, invent_predicates=True):
         self.clusters = ClusterCollection()
         self.state_description_factory = StateDescriptionFactory(
             possible_predicates)
@@ -22,31 +22,48 @@ class AgentModel:
 
         self.cluster_transitions = ClusterTransitions()
         self.cluster_class = cluster_class
-
+        self.invent_predicates = invent_predicates
         self.n_invented = 0
 
-    def get_current_best_cluster_description(self, step):
+        self.inferred_invented_predicates = set()
+
+        self.goals = []
+
+    def reset_invented_inference(self):
+        self.inferred_invented_predicates = set()
+
+    def reset(self):
+        self.reset_invented_inference()
+
+       # print(self.goals)
+        self.goals = []
+
+    def get_current_best_cluster_description(self, step, invented_predicates=set()):
         x, s, a, next_x, next_s, next_a = step
         generalizations = self.clusters.keys()
         applicable_generalizations = s.get_applicable_generalizations(
-            generalizations)
+            generalizations, invented_predicates=invented_predicates)
 
         if applicable_generalizations is None:
             return None
         # check if first fe generalizations differ only in invented predicates
-        if len(applicable_generalizations) > 1 and a is not None:
+        if len(applicable_generalizations) > 1 and a:
             for i in range(1, len(applicable_generalizations)):
                 if not applicable_generalizations[0].compare_predicates(applicable_generalizations[i]):
                     break
-            candidates = applicable_generalizations[:i]
+            candidates = applicable_generalizations[:i+1]
             # check probabilities
-            # print("Candidates:", candidates, len(candidates),
+            # #print("Candidates:", candidates, len(candidates),
             # len(applicable_generalizations))
-            probs = [self.clusters[c].calculate_step_probability(
-                step) for c in candidates]
-            # print(probs, step)
-            best_cluster = candidates[np.argmax(probs)]
-        else:  # len(applicable_generalizations) == 1:
+            if a is not None:
+                probs = [self.clusters[c].calculate_step_probability(
+                    step) for c in candidates]
+                # #print(probs, step)
+                best_cluster = candidates[np.argmax(probs)]
+            else:
+                best_cluster = candidates[0]
+
+        else:
             best_cluster = applicable_generalizations[0]
 
         return best_cluster
@@ -55,99 +72,153 @@ class AgentModel:
         invented_predicate = f"(invented_{self.n_invented})"
         invented_not_pred = f"(not {invented_predicate})"
         self.n_invented += 1
-
         return invented_predicate, invented_not_pred
 
-    def process_step(self, step):
-        x, s, a, next_x, next_s, next_a = step
-
-        generalizations = self.clusters.keys()
-
+    def infer_invented(self, step):
         most_specific = self.get_current_best_cluster_description(step)
+        curr_invented = most_specific.invented_predicates
+
+        for inv in curr_invented:
+            if inv.startswith('(not'):
+
+                notinv = inv[5:-1]
+            else:
+                notinv = f'(not {inv})'
+
+            if notinv in self.inferred_invented_predicates:
+                self.inferred_invented_predicates.remove(notinv)
+
+            self.inferred_invented_predicates.add(inv)
+
+        if self.inferred_invented_predicates and curr_invented:
+            pass
+            # print("Inferred invented predicates:",
+            # self.inferred_invented_predicates, 'at', most_specific)
+
+    def process_state_action(self, step, update_probs=True):
+        x, s, a, next_x, next_s, next_a = step
+        most_specific = self.get_current_best_cluster_description(
+            step, self.inferred_invented_predicates)
 
         if most_specific is None:
+
             prob = -float('inf')
             most_specific = self.state_description_factory.create_state_description([
             ])
-        else:
+
+        elif a is not None:
             prob = self.clusters[most_specific].calculate_step_probability(
                 step)
+        else:
+            return most_specific
+
+        # If we can compute the probability, we can identify the cluster better and update it.
+        cluster_to_update = None
 
         if prob < self.prob_threshold:
+            # are the same observable predicates
 
             if most_specific.compare_predicates(s):
-                if self.clusters[most_specific].is_stable:
+                if self.clusters[most_specific].is_stable and self.invent_predicates:
                     invented_predicate, invented_not_pred = self._invent_predicate()
                     clust = self.clusters[most_specific]
                     clust.add_invented_predicate(  # this updates the key as well
                         invented_not_pred)
 
-                    # for c in self.clusters.keys():
-                    #     self.cluster_transitions[(
-                    #         c, clust.state_description)] = self.cluster_transitions.get((c, most_specific), 0)
-
-                    #     # self.cluster_transitions.pop((c, most_specific), None)
-
-                    #     self.cluster_transitions[(
-                    #         clust.state_description, c)] = self.cluster_transitions.get((most_specific, c), 0)
-
-                    # self.cluster_transitions.pop((most_specific, c), None)
-
-                    # self.clusters.pop(most_specific)
-                    # clust.add_invented_predicate(
-                    #     invented_not_pred)
-                    # self.clusters[clust.state_description] = clust
-
                     s.add_invented_predicate(invented_predicate)
 
                     new_cluster = self.cluster_class(s, self.n_actions)
-                    if a is not None:
-                        new_cluster.update_distribution(step)
+                    cluster_to_update = new_cluster
 
                     self.clusters[s] = new_cluster
                     most_specific = s
 
-                    print("Created new cluster with invented predicate:",
-                          self.clusters[s])
+                    # print("Created new cluster with invented predicate:",
+                    #      self.clusters[s])
 
                 else:
-                    self.clusters[most_specific].update_distribution(step)
-                    # print("Updating cluster:", most_specific, self.clusters[most_specific].counts)
+                    cluster_to_update = self.clusters[most_specific]
+
+                    # #print("Updating cluster:", most_specific, self.clusters[most_specific].counts)
 
             else:
 
                 new_cluster = self.cluster_class(s, self.n_actions)
-                if a is not None:
-                    new_cluster.update_distribution(step)
-
                 self.clusters[s] = new_cluster
                 most_specific = s
-                # print("Updating cluster:", s, self.clusters[s].counts)
-        else:
-            self.clusters[most_specific].update_distribution(step)
-            # print("Updating cluster:", most_specific, self.clusters[most_specific].counts)
 
+                cluster_to_update = new_cluster
+
+                # print("Created new cluster:", s)
+
+            # if a is not None:
+            #     cluster_to_update.update_distribution(step)
+        else:
+            cluster_to_update = self.clusters[most_specific]
+
+        if a is not None and update_probs:
+            cluster_to_update.update_distribution(step)
+
+            # #print("Updating cluster:", most_specific, self.clusters[most_specific].counts)
+
+        return most_specific
+
+    def process_step(self, step):
+        x, s, a, next_x, next_s, next_a = step
+        created_new = False
+        generalizations = self.clusters.keys()
+
+        current_state_most_specific = self.process_state_action(step)
         next_step = (next_x, next_s, next_a, None, None, None)
+        next_state_most_specific = self.process_state_action(
+            next_step, update_probs=False)
+
+        '''next_step = (next_x, next_s, next_a, None, None, None)
         most_specific_next = self.get_current_best_cluster_description(
-            next_step)
+            next_step, self.inferred_invented_predicates)
+
+        # check anomaly in next step. If so, make a new cluster for it
+        if not most_specific_next is None and not next_a is None:
+            prob = self.clusters[most_specific_next].calculate_step_probability(
+                next_step)
+
+            if prob < self.prob_threshold:
+                #print(next_s)
+                #print(most_specific_next, prob)
+                #print('Generalization too unlikely, creating new cluster',
+                      most_specific_next)
+                most_specific_next = None
 
         if most_specific_next is None:
-            print("No applicable generalizations for next state", next_s)
+            #print("No applicable generalizations for next state", next_s)
 
             new_cluster = self.cluster_class(next_s, self.n_actions)
             self.clusters[next_s] = new_cluster
             self.cluster_transitions[(most_specific, next_s)] = 1
-        else:
+        else:'''
 
-            self.cluster_transitions[(most_specific, most_specific_next)] = self.cluster_transitions.get(
-                (most_specific, most_specific_next), 0) + 1
+        self.cluster_transitions[(current_state_most_specific, next_state_most_specific)] = self.cluster_transitions.get(
+            (current_state_most_specific, next_state_most_specific), 0) + 1
+
+        # if created_new:
+        #     model.plot_transition_graph(
+        #         actions=actions, fname='results/abstract_model0.dot')
 
         self.merge_clusters()
+        self.cluster_transitions.drop_deprecated_transitions(
+            cluster_descriptions=self.clusters.keys())
+
+        if self.invent_predicates:
+            self.infer_invented(step)
+            self._clean_invented_predicates()
+
+            # #print("Inferred invented predicates:",
+            #       self.inferred_invented_predicates)
 
     def get_generalizations(self, state_description):
-        generalizations = [k for k in self.clusters]
+        generalizations = [k for k in self.clusters.keys()]
         applicable_generalizations = state_description.get_applicable_generalizations(
-            generalizations)
+            generalizations, invented_predicates=self.inferred_invented_predicates)
         return applicable_generalizations
 
     def _clean_invented_predicates(self):
@@ -158,17 +229,46 @@ class AgentModel:
             invented.extend(cluster.state_description.invented_predicates)
         invented = list(set(invented))
 
+        c = 0
         for p in invented:
             if p.startswith('(not'):
-                notp = p[5:-1]
+                negp = p
+                p = p[5:-1]
             else:
-                notp = f'(not {p})'
+                negp = f'(not {p})'
 
-            if p in invented and notp in invented:
-                invented.remove(p)
-                invented.remove(notp)
+            if p in invented and negp in invented:
 
-        mapping = {p: f'(invented_{i})' for i, p in enumerate(invented)}
+                mapping[p] = f'(invented_{c})'
+                mapping[negp] = f'(not (invented_{c}))'
+                c += 1
+
+        # for c1 in self.clusters.values():
+        #     for c2 in self.clusters.values():
+        #         if not c1.state_description.compare_predicates(c2.state_description):
+        #             continue
+
+        #         inv1 = c1.state_description.invented_predicates
+        #         inv2 = c2.state_description.invented_predicates
+        #         neginv1 = set([f'(not {p})' if not p.startswith(
+        #             '(not') else p[5:-1] for p in list(inv1)])
+        #         if inv2 == neginv1:
+        #             for p in inv1:
+        #                 if p in mapping:
+        #                     negp = f'(not {p})' if not p.startswith(
+        #                         '(not') else p[5:-1]
+
+        #                     mapped_p = mapping[p]
+        #                     mapped_neg_p = mapping[negp]
+        #                     break
+        #             for p in inv1:
+        #                 if p in mapping:
+        #                     negp = f'(not {p})' if not p.startswith(
+        #                         '(not') else p[5:-1]
+
+        #                     mapping[p] = mapped_p
+        #                     mapping[negp] = mapped_neg_p
+        #                    # c += 1
 
         for cluster in self.clusters.values():
             inventeds = cluster.state_description.invented_predicates
@@ -181,48 +281,58 @@ class AgentModel:
 
         self.n_invented = len(invented)
 
+        new_inferred = set()
+        for p in self.inferred_invented_predicates:
+            if p in mapping:
+                new_inferred.add(mapping[p])
+        self.inferred_invented_predicates = new_inferred
+
     def merge_transitions(self, s1, s2, new_s):
-        # print(self.get_cluster_transition_matrix(get_counts=True))
-        prev_sum = self.get_cluster_transition_matrix(get_counts=True).sum()
+        # #print(self.cluster_transitions.get_transition_matrix(get_counts=True))
+        prev_sum = self.cluster_transitions.get_transition_matrix(self.clusters,
+                                                                  get_counts=True).sum()
 
-        new_edges = ClusterTransitions()
-
-        for cluster in self.clusters.keys():
-
-            new_edges[(new_s, cluster)] = self.cluster_transitions.get(
-                (s1, cluster), 0) + self.cluster_transitions.get((s2, cluster), 0)
-            new_edges[(cluster, new_s)] = self.cluster_transitions.get(
-                (cluster, s1), 0) + self.cluster_transitions.get((cluster, s2), 0)
+        # new_edges = ClusterTransitions()
 
         for cluster in self.clusters.keys():
-            if (cluster, s1) in self.cluster_transitions:
-                self.cluster_transitions.pop((cluster, s1))
-            if (cluster, s2) in self.cluster_transitions:
-                self.cluster_transitions.pop((cluster, s2))
+           # #print("Outgoing")
+            a = self.cluster_transitions.pop(
+                (s1, cluster), 0)
+            b = self.cluster_transitions.pop((s2, cluster), 0)
+            c = self.cluster_transitions.pop((new_s, cluster), 0)
+            self.cluster_transitions[(new_s, cluster)] = a + b + c
 
-            if (s1, cluster) in self.cluster_transitions:
-                self.cluster_transitions.pop((s1, cluster))
-            if (s2, cluster) in self.cluster_transitions:
-                self.cluster_transitions.pop((s2, cluster))
+            # #print(a, b, c, '=', a+b+c)
+            # #print("Incoming")
+            a = self.cluster_transitions.pop(
+                (cluster, s1), 0)
+            b = self.cluster_transitions.pop((cluster, s2), 0)
+            c = self.cluster_transitions.pop((cluster, new_s), 0)
+            self.cluster_transitions[(cluster, new_s)] = a + b + c
+            # #print(a, b, c, '=', a+b+c)
 
-        self.cluster_transitions.update(new_edges)
+        # self.cluster_transitions.update(new_edges)
 
-        # print(self.get_cluster_transition_matrix(get_counts=True))
-        curr_sum = self.get_cluster_transition_matrix(get_counts=True).sum()
+        # #print(self.cluster_transitions.get_transition_matrix(get_counts=True))
+        curr_sum = self.cluster_transitions.get_transition_matrix(self.clusters,
+                                                                  get_counts=True).sum()
 
-        print('Sums', prev_sum, curr_sum)
+        # print('Sums', prev_sum, curr_sum)
 
         # assert prev_sum == curr_sum
+    def remove_cluster_and_cleanup(self, cluster_description):
+
+        clust = self.clusters.pop(cluster_description)
+
+        # remove transitions to and from cluster
+        for pair in list(self.cluster_transitions.keys()):
+            if cluster_description in pair:
+                self.cluster_transitions.pop(pair)
 
     def merge_clusters(self):
         # compute distance between clusters
         if len(self.clusters) < 2:
             return
-        # if not self.max_n_clusters is None:
-        #     if self.max_n_clusters < len(self.clusters):
-        #         merge_threshold = self.merge_threshold
-        #     else:
-        merge_threshold = self.merge_threshold
 
         # cluster_distributions = [v.counts for k,v in self.clusters.items()]
         cluster_idx = {i: k for i, k in enumerate(self.clusters.keys())}
@@ -239,42 +349,45 @@ class AgentModel:
                 dist_matrix[i, :] = np.inf
                 dist_matrix[:, i] = np.inf
 
-        # print(dist_matrix)
+        # #print(dist_matrix)
         # find closest clusters
         min_i, min_j = np.unravel_index(
             np.argmin(dist_matrix), dist_matrix.shape)
         min_dist = dist_matrix[min_i, min_j]
-        # print(dist_matrix)
-        # print("max dist:",max_dist)
+        # #print(dist_matrix)
+        # #print("max dist:",max_dist)
 
-        if min_dist < merge_threshold:
-            print(self.get_cluster_transition_matrix(
-                get_counts=True).sum(), 'n_clusters', len(self.clusters))
-            print("Merging clusters with distance:", min_dist)
+        if not self.max_n_clusters is None:
+            if self.max_n_clusters < len(self.clusters):
+                merge_threshold = min_dist
+            else:
+                merge_threshold = self.merge_threshold
+
+        if min_dist <= merge_threshold:
+            # print(self.cluster_transitions.get_transition_matrix(self.clusters,
+            #                                                     get_counts=True).sum(), 'n_clusters', len(self.clusters))
+            # print("Merging clusters with distance:", min_dist)
 
             # merge clusters
             cluster_i = self.clusters[cluster_idx[min_i]]
             cluster_j = self.clusters[cluster_idx[min_j]]
-            print("Cluster i:", cluster_i.state_description)
-            print("Cluster j:", cluster_j.state_description)
-
-            trans_mat = self.get_cluster_transition_matrix(
-                get_counts=True)
-            # print("i")
-            # print(trans_mat[min_i, :].sum(), trans_mat[:, min_i].sum())
-            # print("j")
-            # print(trans_mat[min_j, :].sum(), trans_mat[:, min_j].sum())
+            # print("Cluster i:", cluster_i.state_description)
+            # print("Cluster j:", cluster_j.state_description)
 
             new_cluster = self.cluster_class.merge([cluster_i, cluster_j])
             new_cluster_description = new_cluster.state_description
 
             # and not new_cluster.state_description in [cluster_i.state_description, cluster_j.state_description]:
-            if new_cluster.state_description in self.clusters.keys():
+            cluster_description_already_exists = any([new_cluster.state_description ==
+                                                      c.state_description for c in self.clusters.values()])
+            cluster_description_already_exists_barring_invented = any(
+                [new_cluster.state_description.compare_predicates(c.state_description) for c in self.clusters.values()])
+
+            if cluster_description_already_exists and not new_cluster.state_description in [cluster_i.state_description, cluster_j.state_description] and self.invent_predicates and self.clusters[new_cluster.state_description].is_stable:
 
                 invented_predicate, invented_not_pred = self._invent_predicate()
                 og_cluster_description = new_cluster.state_description.copy()
-                print(self.cluster_transitions.get_transitions(
-                    og_cluster_description))
+
                 existing_cluster = self.clusters[new_cluster.state_description]
                 existing_cluster.add_invented_predicate(
                     invented_not_pred)
@@ -282,57 +395,65 @@ class AgentModel:
                     invented_predicate)
 
                 new_cluster_description = new_cluster.state_description
-                print("OG", og_cluster_description)
-                print("Existing_modded", existing_cluster.state_description)
-                print("New", new_cluster_description)
+                # print("OG", og_cluster_description)
+                # print("Existing_modded", existing_cluster.state_description)
+                # print("New", new_cluster_description)
+                # print(
+                # "######################## Merged cluster already exists, inventing predicate", invented_predicate)
+                # input()
 
-                print(self.cluster_transitions.get_transitions(
-                    existing_cluster.state_description))
+            # cluster description exists barring invented predicates
+            elif cluster_description_already_exists_barring_invented:
 
-                # for c in self.clusters.keys():
-                #     self.cluster_transitions[(
-                #         c, existing_cluster.state_description)] = self.cluster_transitions.get((c, og_cluster_description), 0)
-                #     self.cluster_transitions[(
-                #         existing_cluster.state_description, c)] = self.cluster_transitions.get((og_cluster_description, c), 0)
+                # print("Cluster description already exists barring invented predicates")
 
-                #     print(self.cluster_transitions.get((
-                #         c, existing_cluster.state_description)), self.cluster_transitions.get((
-                #             c, og_cluster_description)))
-
-                #     print(self.cluster_transitions.get((
-                #         existing_cluster.state_description, c)), self.cluster_transitions.get((
-                #             og_cluster_description, c)))
-
-                # self.cluster_transitions.pop(
-                #     (c, og_cluster_description), None)
-                # self.cluster_transitions.pop(
-                #     (og_cluster_description, c), None)
-
-                print(
-                    "######################## Merged cluster already exists, inventing predicate", invented_predicate)
+                # Two cases: if we are not using invented predicates, we can simply merge the clusters.
+                # if we are using invented predicates, treat this as the 'default' behavior. It will either be merged into
+                # one of the other clusters with invented later, or it will remain as is.
+                if not self.invent_predicates:
+                    # Merge the new clsuter with the existing one. Since they have the same description, transitions will be merged as normal
+                    clust_i = self.clusters[new_cluster_description]
+                    clust_j = new_cluster
+                    new_cluster = self.cluster_class.merge([clust_i, clust_j])
 
             self.clusters[new_cluster_description] = new_cluster
-            print("added cluster:", new_cluster.state_description)
+            #    #print("added cluster:", new_cluster.state_description)
+            # print("n incoming", len(
+            # self.cluster_transitions.get_transitions_in(new_cluster_description)))
+            # print("n outgoing", len(
+            # self.cluster_transitions.get_transitions_out(new_cluster_description)))
+
+            # print("n incoming", len(self.cluster_transitions.get_transitions_in(cluster_i.state_description)),
+            # len(self.cluster_transitions.get_transitions_in(cluster_j.state_description)))
+            # print("n outgoing", len(self.cluster_transitions.get_transitions_out(cluster_i.state_description)), len(
+            # self.cluster_transitions.get_transitions_out(cluster_j.state_description)))
 
             self.merge_transitions(
                 cluster_i.state_description, cluster_j.state_description, new_cluster_description)
-            print(self.cluster_transitions.get_transitions(
-                new_cluster_description))
+            # #print(self.cluster_transitions.get_transitions_in(
+            #     new_cluster_description))
+            # print("n incoming", len(
+            #    self.cluster_transitions.get_transitions_in(new_cluster_description)))
+            # print("n outgoing", len(
+            #    self.cluster_transitions.get_transitions_out(new_cluster_description)))
+            names = self.clusters._cluster_names()
+            # #print(names[new_cluster_description])
+            # #print(self.cluster_transitions._named_transitions(names))
 
-            print("Merged cluster:", new_cluster.state_description)
+            # print("Merged cluster:", new_cluster.state_description)
             if cluster_i.state_description != new_cluster_description:
-                print('popping', cluster_i.state_description)
-                self.clusters.pop(cluster_i.state_description)
+                # print('popping', cluster_i.state_description)
+                self.remove_cluster_and_cleanup(cluster_i.state_description)
             if cluster_j.state_description != new_cluster_description:
-                print('popping', cluster_j.state_description)
-                self.clusters.pop(cluster_j.state_description)
+                # print('popping', cluster_j.state_description)
+                self.remove_cluster_and_cleanup(cluster_j.state_description)
 
             # input()
 
             self.merge_clusters()  # recursively merge clusters
-        # self._clean_invented_predicates()
+
         else:
-            print("No clusters to merge")
+            pass  # print("No clusters to merge")
 
     def relabel_trajectory(self, trajectory):
         new_trajectory = []
@@ -362,22 +483,9 @@ class AgentModel:
     def get_cluster_counts(self):
         return {k: v.counts for k, v in self.clusters.items()}
 
-    def get_cluster_transition_matrix(self, get_counts=False):
-        matrix = np.zeros((self.n_clusters, self.n_clusters))
-        descriptions = self.clusters.keys()
-        for i in range(self.n_clusters):
-            for j in range(self.n_clusters):
-                matrix[i, j] = self.cluster_transitions.get(
-                    (descriptions[i], descriptions[j]), 0)
-        # normalize
-        if not get_counts:
-            matrix = matrix + 1
-            matrix = matrix / np.sum(matrix, axis=1, keepdims=True)
-
-        return matrix
-
     def compute_step_likelihood(self, step):
-        trans_mat = self.get_cluster_transition_matrix()
+        trans_mat = self.cluster_transitions.get_transition_matrix(
+            self.clusters)
 
         x, s, a, next_x, next_s, next_a = step
         most_specific = self.get_current_best_cluster_description(step)
@@ -399,37 +507,94 @@ class AgentModel:
         return step_lik
 
     def compute_trajectory_likelihood(self, trajectory):
-        trans_mat = self.get_cluster_transition_matrix()
+        trans_mat = self.cluster_transitions.get_transition_matrix(
+            self.clusters)
         traj_lik = 0
         for step in trajectory:
 
             traj_lik += self.compute_step_likelihood(step)
         return traj_lik
 
-    def get_next_state(self, s):
+    def get_next_state(self, s, use_invented=False):
 
-        generalizations = [k for k in self.clusters]
-        # print(s)
-        # print(generalizations)
+        generalizations = [k for k in self.clusters.keys()]
+        # #print(s)
+        # #print(generalizations)
         applicable_generalizations = s.get_applicable_generalizations(
             generalizations)
         if applicable_generalizations is None:
             raise ValueError(
                 "Cannot predict next state if current state has no applicable generalizations")
 
+        if use_invented:
+            including_invented = []
+            for g in applicable_generalizations:
+                if not g._check_contradiction_in_invented(self.inferred_invented_predicates):
+                    including_invented.append(g)
+
+            applicable_generalizations = including_invented
+
         most_specific = applicable_generalizations[0]
+        curr_state = most_specific
 
-        indx = generalizations.index(most_specific)
+        indx = generalizations.index(curr_state)
 
-        trans_matrix = self.get_cluster_transition_matrix(get_counts=True)
+        trans_matrix = self.cluster_transitions.get_transition_matrix(self.clusters,
+                                                                      get_counts=True)
         counts = trans_matrix[indx]+1
-        counts[indx] = 0
-        probs = counts / np.sum(counts)
+        new_counts = np.zeros_like(counts)
+        for i, c in enumerate(self.clusters):
+            if len(c.state_description.invented_predicates) > 0 and not c.state_description._check_contradiction_in_invented(self.inferred_invented_predicates):
+                new_counts[i] = counts[i]
 
-        next_state_idx = np.random.choice(np.arange(self.n_clusters), p=probs)
+            if c.state_description._check_contradiction_in_invented(self.inferred_invented_predicates):
+                counts[i] = 0
+
+                # print(self.inferred_invented_predicates,
+                #      'zeros out', c.state_description)
+            if c.state_description.subsumes(s):
+                counts[i] = 0
+                # print(s, 'subsumes', c.state_description)
+        # if sum(new_counts) > 0:
+        #    counts = new_counts
+        indx = generalizations.index(curr_state)
+        counts[indx] = 0
+
+        if counts.sum() == 0:
+            self.goals.append("randomizing next state")
+            probs = np.ones(len(counts))/len(counts)
+        else:
+
+            probs = counts / np.sum(counts)
+
+        next_state_idx = np.random.choice(
+            np.arange(self.n_clusters), p=probs)
+
         next_state = generalizations[next_state_idx]
+        self.goals.append(next_state)
 
         return next_state
+
+    def get_stationary_distribution(self):
+        transition_matrix = self.cluster_transitions.get_transition_matrix(
+            self.clusters)
+        transition_matrix_transp = transition_matrix.T
+        eigenvals, eigenvects = np.linalg.eig(transition_matrix_transp)
+        '''
+        Find the indexes of the eigenvalues that are close to one.
+        Use them to select the target eigen vectors. Flatten the result.
+        '''
+        close_to_1_idx = np.isclose(eigenvals, 1)
+        target_eigenvect = eigenvects[:, close_to_1_idx]
+        target_eigenvect = target_eigenvect[:, 0]
+        # Turn the eigenvector elements into probabilites
+        stationary_distrib = target_eigenvect / sum(target_eigenvect)
+
+        d = {k: stationary_distrib[i]
+             for i, k in enumerate(self.clusters.keys())}
+
+        print(d)
+        return d
 
     def get_cluster_trajectory(self, start_state, n_steps):
         trajectory = [start_state]
@@ -447,8 +612,10 @@ class AgentModel:
         for i in range(self.n_clusters):
             G.add_node(i)
 
-        count_matrix = self.get_cluster_transition_matrix(get_counts=True)
-        trans_matrix = self.get_cluster_transition_matrix()
+        count_matrix = self.cluster_transitions.get_transition_matrix(self.clusters,
+                                                                      get_counts=True)
+        trans_matrix = self.cluster_transitions.get_transition_matrix(
+            self.clusters)
 
         # Add edges to the graph with transition probabilities as labels
         for i in range(self.n_clusters):
@@ -456,7 +623,7 @@ class AgentModel:
 
                 count = count_matrix[i, j]
                 prob = trans_matrix[i, j]
-                prob = np.round(prob, decimals=3)
+                prob = np.round(prob, decimals=5)
                 if count > 0:
                     G.add_edge(i, j, weight=prob)
 
@@ -467,12 +634,13 @@ class AgentModel:
 
         for k, v in self.clusters.items():
             action_strs[k] = v.cluster_str(actions)
-
+        names = self.clusters._cluster_names()
         # make node_labels
         node_labels = {
-            i: str(g)+'\n'+"".join(action_strs[g]) for i, g in enumerate(self.clusters.keys())}
+            i: names[g]+"\n"+str(g)+'\n'+"".join(action_strs[g]) for i, g in enumerate(self.clusters.keys())}
 
-        count_matrix = self.get_cluster_transition_matrix(get_counts=True)
+        count_matrix = self.cluster_transitions.get_transition_matrix(self.clusters,
+                                                                      get_counts=True)
 
         sink_states = count_matrix.sum(axis=1) == 0
 
@@ -500,7 +668,7 @@ def plot_model(agent_model, markov_model, fname='file.dot', actions=['up', 'down
 
     per_set_action_probs = {k: [(actions[i], f"{v:.2f}") for i, v in enumerate(
         per_set_action_probs[k])] for k in per_set_action_probs}
-    print(per_set_action_probs)
+    # print(per_set_action_probs)
 
     node_labels = {i: str(
         g)+'\n'+str(per_set_action_probs[g]) for i, g in enumerate(generalizations)}
@@ -516,7 +684,7 @@ def prepare_step(model, step):
     described = describe_state(obs)
     new_described = describe_state(new_obs)
 
-    # print(described)
+    # #print(described)
     state = model.state_description_factory.create_state_description_from_dict(
         described)
     next_state = model.state_description_factory.create_state_description_from_dict(
@@ -526,14 +694,14 @@ def prepare_step(model, step):
     return step
 
 
+actions = ['up', 'down', 'left', 'right', 'craft_planks',
+           'craft_chair_parts', 'craft_chair', 'craft_decoration', 'craft_stick']
 if __name__ == '__main__':
 
-    actions = ['up', 'down', 'left', 'right', 'craft_planks',
-               'craft_chair_parts', 'craft_chair', 'craft_decoration', 'craft_stick']
     possible_predicates = ['(next_to wood)', '(has wood)', '(has planks)',
                            '(has chair_parts)', '(has chair)', '(has decoration)', '(has stick)']
     model = AgentModel(len(actions), possible_predicates, 0.05,
-                       0.1, cluster_class=CategoricalStateCluster)
+                       0.1, cluster_class=CategoricalStateCluster, invent_predicates=True)
 
     # data = pkl.load(open("trajectories_decoration.pkl","rb"))
     # for trajectory in data:
@@ -542,7 +710,7 @@ if __name__ == '__main__':
     #         step = prepare_step(model, step)
 
     #         model.process_step(step)
-    #         print("N of clusters",model.n_clusters)
+    #         #print("N of clusters",model.n_clusters)
 
     # pkl.dump(model,open("agent_model_decoration.pkl","wb"))
 
@@ -553,22 +721,26 @@ if __name__ == '__main__':
     # described_data = []
     for i, trajectory in enumerate(data):
         described_trajectory = []
-        for step in trajectory:
+        for j, step in enumerate(trajectory):
             step = prepare_step(model, step)
             model.process_step(step)
 
-        if i == 51:
-            print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+        if i == 49:
+            # print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
             model.plot_transition_graph(
                 actions=actions, fname='results/abstract_model0.dot')
-        if i == 52:
+        if i == 50:
             model.plot_transition_graph(
                 actions=actions, fname='results/abstract_model1.dot')
-            print(model.get_cluster_transition_matrix(get_counts=True))
-            exit()
+            # print(model.get_transition_matrix(
+            #    model.clusters, get_counts=True))
+            # print(model.cluster_transitions._named_transitions(
+            #    model.clusters._cluster_names()))
 
-    model.merge_clusters()
+    # model.merge_clusters()
+    # model._clean_invented_predicates()
 
+    model.get_stationary_distribution()
     traj_liks = []
     for trajectory in data:
         lik = 0
@@ -577,10 +749,9 @@ if __name__ == '__main__':
             lik += model.compute_step_likelihood(step)
         traj_liks.append(lik)
 
-    print("Avg lik", np.mean(traj_liks))
+    # print("Avg lik", np.mean(traj_liks))
 
     model.plot_transition_graph(
         actions=actions, fname='results/abstract_model2.dot')
 
-    print(model.get_cluster_transition_matrix(get_counts=True))
-    print(model.clusters.keys())
+    pkl.dump(model, open("agent_model_decoration_or_stick.pkl", "wb"))

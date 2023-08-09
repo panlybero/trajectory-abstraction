@@ -2,6 +2,10 @@ class ClusterCollection:
     def __init__(self):
         self.clusters = []
 
+    def _cluster_names(self):
+
+        return {cluster.state_description: f'cluster_{i}' for i, cluster in enumerate(self.clusters)}
+
     def __getitem__(self, description):
 
         for cluster in self.clusters:

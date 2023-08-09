@@ -3,7 +3,7 @@ import numpy as np
 
 
 class GridWorldEnv(gym.Env):
-    def __init__(self, n, crafting_goal='chair', max_timesteps=100):
+    def __init__(self, n, crafting_goal='chair', max_timesteps=100, success_reward=100, dict_obs=True):
         super(GridWorldEnv, self).__init__()
 
         self.n = n
@@ -13,6 +13,7 @@ class GridWorldEnv(gym.Env):
         self.max_timesteps = max_timesteps
         self.timesteps = 0
         self.crafting_goal = crafting_goal
+        self.success_reward = success_reward
         self.inventory = {
             'wood': 0,
             'planks': 0,
@@ -21,16 +22,21 @@ class GridWorldEnv(gym.Env):
             'decoration': 0,
             'stick': 0
         }
+        self.dict_obs = dict_obs
+        if dict_obs:
+            self.observation_space = gym.spaces.Dict({
+                'distance_to_wood': gym.spaces.Box(low=0.0, high=1, shape=(8,), dtype=np.float32),
+                'inventory': gym.spaces.Box(low=0, high=5, shape=(len(self.inventory),), dtype=np.float32)
+            })
+        else:
+            self.observation_space = gym.spaces.Box(
+                low=0, high=5, shape=(8+len(self.inventory)+5,), dtype=np.float32)
 
-        self.observation_space = gym.spaces.Dict({
-            'distance_to_wood': gym.spaces.Box(low=0.0, high=n, shape=(8,), dtype=np.float32),
-            'inventory': gym.spaces.Box(low=0, high=n, shape=(len(self.inventory),), dtype=np.float32)
-        })
         # 4 navigation actions, 4 crafting action
         self.action_space = gym.spaces.Discrete(9)
 
     def _scatter_wood(self):
-        num_wood = np.random.randint(4, self.n**2 // 4)
+        num_wood = np.random.randint(4, max(5, self.n))
         wood_positions = []
         while len(wood_positions) < num_wood:
             pos = tuple(np.random.randint(0, self.n, size=2))
@@ -45,6 +51,11 @@ class GridWorldEnv(gym.Env):
             'distance_to_wood': self._calculate_distance_to_wood()/self.n,
             'inventory': np.array(list(self.inventory.values()))
         }
+
+        if not self.dict_obs:
+            obs = np.concatenate(
+                [obs['distance_to_wood'], obs['inventory'], np.random.rand(5)])
+
         return obs
 
     def _calculate_distance_to_wood(self):
@@ -120,6 +131,9 @@ class GridWorldEnv(gym.Env):
             return True
         return False
 
+    def render(self, mode="human"):
+        return
+
     def render_ascii(self):
         n = self.n
         world = self.world.copy()
@@ -167,13 +181,13 @@ class GridWorldEnv(gym.Env):
 
         if self.inventory[self.crafting_goal] >= 1 or self.timesteps >= self.max_timesteps:
             done = True  # Episode termination is not implemented in this example
-            reward = 100 if self.inventory[self.crafting_goal] >= 1 else -1
+            reward = self.success_reward if self.inventory[self.crafting_goal] >= 1 else -1
         else:
             done = False
 
         obs = self._get_observation()
 
-        return obs, reward, done, {}
+        return obs, float(reward), done, {}
 
     def reset(self):
         self.world = np.zeros((self.n, self.n))

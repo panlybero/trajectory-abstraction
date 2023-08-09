@@ -19,6 +19,7 @@
     planks - physobj
     chair - physobj
     decoration - physobj
+    stick - physobj
     
 )
 
@@ -30,6 +31,7 @@
     chair - physobj
     chair_parts - physobj
     decoration - physobj
+    stick - physobj
 
 )
 
@@ -100,6 +102,17 @@
         (not (has planks))
     )
 )
+(:action craft_stick
+    :parameters ()
+    :precondition (and (has planks))
+    
+    :effect (and
+        (has stick)
+        (not (has planks))
+    )
+)
+
+
 
 (:action craft_chair_parts
     :parameters ()

@@ -35,24 +35,25 @@ class StateCluster(ABC):
 
 
 class CategoricalStateCluster(StateCluster):
-    def __init__(self, state_description, n_actions, stability_count=10):
+    def __init__(self, state_description, n_actions, stability_count=10, smoothing=1):
         super().__init__(state_description)
         self.n_actions = n_actions
         self.counts = np.zeros(n_actions)
         self._is_stable = False
         self.stability_count = stability_count
+        self.smoothing = smoothing
 
     def calculate_step_probability(self, step):
         _, _, action_index, _, _, _ = step
 
-        counts = self.counts + 1
+        counts = self.counts + self.smoothing
         action_probabilities = counts / np.sum(counts)
 
         return action_probabilities[action_index]
 
     def get_next_action(self, info):
 
-        counts = self.counts + 1
+        counts = self.counts + self.smoothing
         action_probabilities = counts / np.sum(counts)
         next_action = np.random.choice(self.n_actions, p=action_probabilities)
         return next_action
@@ -66,19 +67,21 @@ class CategoricalStateCluster(StateCluster):
         n_actions = state_cluster_list[0].n_actions
         descriptions = [
             state_cluster.state_description for state_cluster in state_cluster_list]
-        new_cluster_description = StateDescription.least_general_generalization(
+        new_cluster_description = StateDescription.generalize(
             descriptions)
         new_cluster = cls(new_cluster_description, n_actions)
 
         for state_cluster in state_cluster_list:
             new_cluster.counts += state_cluster.counts
+            #print(state_cluster.counts)
+        #print(new_cluster.counts)
         return new_cluster
 
     @classmethod
     def compute_distance(self, c1, c2):
-        count1 = c1.counts+1
+        count1 = c1.counts + c1.smoothing
         count1 = count1/np.sum(count1)
-        count2 = c2.counts+1
+        count2 = c2.counts + c2.smoothing
         c2 = count2/np.sum(count2)
         dist = spatial.distance.jensenshannon(count1, count2)
         return dist

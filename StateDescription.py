@@ -17,17 +17,51 @@ class StateDescription:
         s2 = set(other.predicates).union(other.invented_predicates)
         return s1 == s2
 
-    def to_conjunction_str(self):
-        conj = f"(and {' '.join(self.predicates)})"
+    def to_conjunction_str(self, with_invented=False):
+        conjuncts = self.predicates
+        if with_invented:
+            conjuncts += list(self.invented_predicates)
+
+        conj = f"(and {' '.join(conjuncts)})"
 
         return conj
 
     def add_invented_predicate(self, predicate):
         self.invented_predicates.add(predicate)
 
+    def remove_invented_predicate(self, predicate):
+        self.invented_predicates.remove(predicate)
+
     def to_list_str(self):
         s = '\n'.join(self.predicates)
         return s
+
+    @classmethod
+    def generalize(cls, state_descriptions):
+        if not state_descriptions:
+            return None
+
+        predicates_intersection = set(state_descriptions[0].predicates)
+        invented_predicates = set(
+            state_descriptions[0].invented_predicates)
+        for state_desc in state_descriptions[1:]:
+            predicates_intersection.intersection_update(state_desc.predicates)
+            invented_predicates.update(
+                state_desc.invented_predicates)
+
+        clean_preds = set()
+
+        for pred in invented_predicates:
+            if pred.startswith("(not"):
+                inv_pred = pred[5:-1]
+            else:
+                inv_pred = f"(not {pred})"
+
+            if not inv_pred in invented_predicates:
+                clean_preds.add(pred)
+        invented_predicates = clean_preds
+
+        return cls(list(predicates_intersection), set(invented_predicates))
 
     @classmethod
     def least_general_generalization(cls, state_descriptions):
@@ -44,11 +78,28 @@ class StateDescription:
 
         return cls(list(predicates_intersection), list(invented_predicates_intersection))
 
-    def get_applicable_generalizations(self, generalizations):
+    def _check_contradiction_in_invented(self, invented):
+        '''
+        Check whether the current description contradicts with the invented predicates set
+            Contradiction occurs when the current description asserts that an invented predicate is true but 
+            the invented predicate is asserted to be false in the invented predicates
+        '''
+        for inv in invented:
+            if not inv.startswith("(not"):
+                notinv = f"(not {inv})"
+            else:
+                notinv = inv[5:-1]
+
+            if notinv in self.invented_predicates:
+                return True
+        return False
+
+    def get_applicable_generalizations(self, generalizations, invented_predicates=set()):
         applicable_generalizations = []
 
         for generalization in generalizations:
-            if generalization.subsumes(self):
+
+            if generalization.subsumes(self) and not generalization._check_contradiction_in_invented(invented_predicates):
                 applicable_generalizations.append(generalization)
 
         if len(applicable_generalizations) == 0:

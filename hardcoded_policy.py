@@ -1,3 +1,5 @@
+import torch
+from stable_baselines3.common.policies import BasePolicy
 import numpy as np
 
 
@@ -66,6 +68,27 @@ class HardcodedPolicy:
             elif inventory['planks'] == 0:
                 yield next(self._get_planks(inventory, distance_to_wood))
 
+    def _leave(self, inventory, distance_to_wood):
+        min_distance_idx = np.argmin(distance_to_wood)
+        if min_distance_idx in [4, 5]:
+            yield np.random.choice([0, 2])
+        if min_distance_idx in [6, 7]:
+            yield np.random.choice([1, 3])
+
+        if all(np.array(distance_to_wood) == 1):
+            yield np.random.randint(4)
+        yield min_distance_idx
+
+    def get_action(self, obs):
+
+        d_t_w = obs[:, :8].numpy().flatten()
+        inventory = obs[:, 8:].numpy().flatten()
+        # print(d_t_w, inventory)
+        action = self.act(d_t_w, inventory)
+        action = torch.tensor([action])
+
+        return action
+
     def act(self, distance_to_wood, inventory):
         inventory = {k: v for k, v in zip(
             ['wood', 'planks', 'chair_parts', 'chair', 'decoration', "stick"], inventory)}
@@ -84,3 +107,38 @@ class HardcodedPolicy:
         elif self.crafting_goal == 'stick':
 
             return next(self._get_stick(inventory, distance_to_wood))
+
+
+class SBHardCodedPolicy(BasePolicy):
+    def __init__(self, observation_space, action_space, device, n=10, crafting_goal='chair'):
+        super(SBHardCodedPolicy, self).__init__(
+            observation_space, action_space, device)
+
+        # The hardcoded policy object should be provided at initialization.
+        # It needs to have a method 'get_action' that takes an observation
+        # and returns an action.
+        self.hardcoded_policy = HardcodedPolicy(n, crafting_goal=crafting_goal)
+
+    def forward(self, obs, deterministic=False):
+        """
+        Forward pass in policy.
+
+        :param obs: (torch.Tensor) The observation
+        :param deterministic: (bool) Whether to use stochastic or deterministic actions
+        :return: (torch.Tensor, torch.Tensor) the model's action and the next state (empty tensor)
+        """
+        # We don't use the deterministic flag because the hardcoded policy may not be able to handle it
+        action = self.hardcoded_policy.get_action(obs)
+        return torch.Tensor(action)
+
+    def _predict(self, observation, deterministic=False):
+        """
+        Get the action according to the policy for a given observation.
+
+        :param observation: ([float]) the observation
+        :param deterministic: (bool) Whether to use stochastic or deterministic actions
+        :return: (int, float) the action and the policy
+        """
+        # Again, we don't use the deterministic flag
+        action = self.hardcoded_policy.get_action(observation)
+        return action
