@@ -33,7 +33,7 @@ class AgentModel:
         self.inferred_invented_predicates = set()
 
     def reset(self):
-        self.reset_invented_inference()
+        # self.reset_invented_inference()
 
        # print(self.goals)
         self.goals = []
@@ -47,7 +47,7 @@ class AgentModel:
         if applicable_generalizations is None:
             return None
         # check if first fe generalizations differ only in invented predicates
-        if len(applicable_generalizations) > 1 and a:
+        if len(applicable_generalizations) > 1:
             for i in range(1, len(applicable_generalizations)):
                 if not applicable_generalizations[0].compare_predicates(applicable_generalizations[i]):
                     break
@@ -61,7 +61,13 @@ class AgentModel:
                 # #print(probs, step)
                 best_cluster = candidates[np.argmax(probs)]
             else:
-                best_cluster = candidates[0]
+                best_cluster = None
+                consistent_candidates = []
+                for c in candidates:
+                    if not c._check_contradiction_in_invented(invented_predicates):
+                        consistent_candidates.append(c)
+
+                best_cluster = consistent_candidates[0]
 
         else:
             best_cluster = applicable_generalizations[0]
@@ -209,8 +215,31 @@ class AgentModel:
             cluster_descriptions=self.clusters.keys())
 
         if self.invent_predicates:
+            before = self.inferred_invented_predicates.copy()
             self.infer_invented(step)
+
             self._clean_invented_predicates()
+            # print(self.clusters.keys())
+            current_state_most_specific = self.get_current_best_cluster_description(
+                step, self.inferred_invented_predicates)
+            next_state_most_specific = self.get_current_best_cluster_description(
+                next_step, self.inferred_invented_predicates)
+
+            self.clusters[current_state_most_specific].add_consistent_with_infered(
+                self.inferred_invented_predicates)
+            self.clusters[next_state_most_specific].add_consistent_with_infered(
+                self.inferred_invented_predicates)
+            # if before != self.inferred_invented_predicates:
+            #     print("Inferred invented predicates:",
+            #           self.inferred_invented_predicates)
+            #     print("adding to clusters")
+            #     print(current_state_most_specific, next_state_most_specific,
+            #           self.inferred_invented_predicates)
+
+            # print(
+            #     self.clusters[current_state_most_specific].consistent_with_infered)
+            # print(
+            #     self.clusters[next_state_most_specific].consistent_with_infered)
 
             # #print("Inferred invented predicates:",
             #       self.inferred_invented_predicates)
@@ -273,11 +302,16 @@ class AgentModel:
         for cluster in self.clusters.values():
             inventeds = cluster.state_description.invented_predicates
             new_inventeds = set()
+            new_consistent = set()
             for p in inventeds:
                 if p in mapping:
                     new_inventeds.add(mapping[p])
+            for p in cluster.consistent_with_infered:
+                if p in mapping:
+                    new_consistent.add(mapping[p])
 
             cluster.state_description.invented_predicates = new_inventeds
+            cluster.consistent_with_infered = new_consistent
 
         self.n_invented = len(invented)
 
@@ -285,6 +319,7 @@ class AgentModel:
         for p in self.inferred_invented_predicates:
             if p in mapping:
                 new_inferred.add(mapping[p])
+
         self.inferred_invented_predicates = new_inferred
 
     def merge_transitions(self, s1, s2, new_s):
@@ -362,6 +397,8 @@ class AgentModel:
                 merge_threshold = min_dist
             else:
                 merge_threshold = self.merge_threshold
+        else:
+            merge_threshold = self.merge_threshold
 
         if min_dist <= merge_threshold:
             # print(self.cluster_transitions.get_transition_matrix(self.clusters,
@@ -515,7 +552,7 @@ class AgentModel:
             traj_lik += self.compute_step_likelihood(step)
         return traj_lik
 
-    def get_next_state(self, s, use_invented=False):
+    def get_next_state(self, s, use_invented=False, exclude=set()):
 
         generalizations = [k for k in self.clusters.keys()]
         # #print(s)
@@ -542,13 +579,14 @@ class AgentModel:
         trans_matrix = self.cluster_transitions.get_transition_matrix(self.clusters,
                                                                       get_counts=True)
         counts = trans_matrix[indx]+1
-        new_counts = np.zeros_like(counts)
-        for i, c in enumerate(self.clusters):
-            if len(c.state_description.invented_predicates) > 0 and not c.state_description._check_contradiction_in_invented(self.inferred_invented_predicates):
-                new_counts[i] = counts[i]
+        inconsistent = []
 
-            if c.state_description._check_contradiction_in_invented(self.inferred_invented_predicates):
+        for i, c in enumerate(self.clusters):
+
+            if not c.is_consistent_with_infered(self.inferred_invented_predicates):
+                # if c.state_description._check_contradiction_in_invented(self.inferred_invented_predicates):
                 counts[i] = 0
+                inconsistent.append(i)
 
                 # print(self.inferred_invented_predicates,
                 #      'zeros out', c.state_description)
@@ -559,10 +597,16 @@ class AgentModel:
         #    counts = new_counts
         indx = generalizations.index(curr_state)
         counts[indx] = 0
+        for ex in exclude:
+            if ex in generalizations:
+                counts[generalizations.index(ex)] = 0
 
         if counts.sum() == 0:
+            inconsistent = np.array(inconsistent)
             self.goals.append("randomizing next state")
-            probs = np.ones(len(counts))/len(counts)
+            probs = np.ones(len(counts))
+            probs[inconsistent] = 0
+            probs = probs / np.sum(probs)
         else:
 
             probs = counts / np.sum(counts)
@@ -603,7 +647,7 @@ class AgentModel:
             trajectory.append(state)
         return trajectory
 
-    def plot_transition_graph(self, actions, fname='file.dot'):
+    def plot_transition_graph(self, actions, fname='file.dot', edge_labels='prob'):
 
         # Create a directed graph
         G = nx.DiGraph()
@@ -618,14 +662,18 @@ class AgentModel:
             self.clusters)
 
         # Add edges to the graph with transition probabilities as labels
+
         for i in range(self.n_clusters):
             for j in range(self.n_clusters):
 
                 count = count_matrix[i, j]
                 prob = trans_matrix[i, j]
-                prob = np.round(prob, decimals=5)
+                if edge_labels == 'prob':
+                    w = np.round(prob, decimals=5)
+                elif edge_labels == 'count':
+                    w = count
                 if count > 0:
-                    G.add_edge(i, j, weight=prob)
+                    G.add_edge(i, j, weight=w)
 
         for u, v, d in G.edges(data=True):
             d['label'] = f"{d.get('weight',''):.3f}"
@@ -637,7 +685,7 @@ class AgentModel:
         names = self.clusters._cluster_names()
         # make node_labels
         node_labels = {
-            i: names[g]+"\n"+str(g)+'\n'+"".join(action_strs[g]) for i, g in enumerate(self.clusters.keys())}
+            i: names[g]+"\n"+str(g)+'\n'+f"Consistent {self.clusters[g].consistent_with_infered}"+'\n'+"".join(action_strs[g]) for i, g in enumerate(self.clusters.keys())}
 
         count_matrix = self.cluster_transitions.get_transition_matrix(self.clusters,
                                                                       get_counts=True)
@@ -700,8 +748,8 @@ if __name__ == '__main__':
 
     possible_predicates = ['(next_to wood)', '(has wood)', '(has planks)',
                            '(has chair_parts)', '(has chair)', '(has decoration)', '(has stick)']
-    model = AgentModel(len(actions), possible_predicates, 0.05,
-                       0.1, cluster_class=CategoricalStateCluster, invent_predicates=True)
+    model = AgentModel(len(actions), possible_predicates, 0.01,
+                       0.1, cluster_class=CategoricalStateCluster, invent_predicates=True, max_n_clusters=10)
 
     # data = pkl.load(open("trajectories_decoration.pkl","rb"))
     # for trajectory in data:
@@ -719,23 +767,20 @@ if __name__ == '__main__':
     data = pkl.load(open("results/trajectories_decoration_or_stick.pkl", "rb"))
 
     # described_data = []
-    for i, trajectory in enumerate(data):
-        described_trajectory = []
-        for j, step in enumerate(trajectory):
-            step = prepare_step(model, step)
-            model.process_step(step)
+    for r in range(3):
 
-        if i == 49:
-            # print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
-            model.plot_transition_graph(
-                actions=actions, fname='results/abstract_model0.dot')
-        if i == 50:
-            model.plot_transition_graph(
-                actions=actions, fname='results/abstract_model1.dot')
+        for i, trajectory in enumerate(data):
+            described_trajectory = []
+            for _ in range(2):
+                for j, step in enumerate(trajectory):
+                    step = prepare_step(model, step)
+                    model.process_step(step)
             # print(model.get_transition_matrix(
             #    model.clusters, get_counts=True))
             # print(model.cluster_transitions._named_transitions(
             #    model.clusters._cluster_names()))
+        model.plot_transition_graph(
+            actions=actions, fname=f'results/abstract_model{r}.dot')
 
     # model.merge_clusters()
     # model._clean_invented_predicates()
@@ -750,8 +795,5 @@ if __name__ == '__main__':
         traj_liks.append(lik)
 
     # print("Avg lik", np.mean(traj_liks))
-
-    model.plot_transition_graph(
-        actions=actions, fname='results/abstract_model2.dot')
 
     pkl.dump(model, open("agent_model_decoration_or_stick.pkl", "wb"))

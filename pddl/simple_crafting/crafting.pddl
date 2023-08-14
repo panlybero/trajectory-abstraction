@@ -32,6 +32,7 @@
     chair_parts - physobj
     decoration - physobj
     stick - physobj
+    trader - physobj
 
 )
 

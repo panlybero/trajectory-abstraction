@@ -9,6 +9,13 @@ class StateCluster(ABC):
     def __init__(self, state_description):
         self.state_description = state_description
         self._is_stable = True
+        self.consistent_with_infered = set()
+
+    def is_consistent_with_infered(self, infered):
+        for i in infered:
+            if i not in self.consistent_with_infered:
+                return False
+        return True
 
     @abstractmethod
     def calculate_step_probability(self, step):
@@ -28,6 +35,10 @@ class StateCluster(ABC):
 
     def add_invented_predicate(self, predicate):
         self.state_description.add_invented_predicate(predicate)
+
+    def add_consistent_with_infered(self, predicates):
+        for predicate in predicates:
+            self.consistent_with_infered.add(predicate)
 
     @property
     def is_stable(self):
@@ -73,8 +84,13 @@ class CategoricalStateCluster(StateCluster):
 
         for state_cluster in state_cluster_list:
             new_cluster.counts += state_cluster.counts
-            #print(state_cluster.counts)
-        #print(new_cluster.counts)
+
+        union = set()
+        for state_cluster in state_cluster_list:
+            union = union.union(state_cluster.consistent_with_infered)
+        new_cluster.consistent_with_infered = union
+        # print(state_cluster.counts)
+        # print(new_cluster.counts)
         return new_cluster
 
     @classmethod

@@ -21,6 +21,16 @@ from imitation.algorithms.adversarial.airl import AIRL
 from imitation.util.util import make_vec_env
 
 
+class SBPolicyWrapper:
+    def __init__(self, policy):
+        self.policy = policy
+
+    def act(self, distance_to_wood, inventory, distance_to_trader):
+        obs = np.concatenate((distance_to_wood, inventory, distance_to_trader))
+        action, _ = self.policy.predict(obs)
+        return action
+
+
 def sample_expert_transitions(env, n_new_eps=1):
     expert = SBHardCodedPolicy(env.observation_space, env.action_space,
                                device='cpu', n=env.n, crafting_goal=env.crafting_goal)  # train_expert()
@@ -290,7 +300,7 @@ def bc_decoration_stick():
     expert_rewards = []
     times = []
     crafting_goal = 'decoration'
-    for repeat in range(20):
+    for repeat in range(1):
         policy = None
         buffer = None
         rewards.append([])
@@ -322,6 +332,8 @@ def bc_decoration_stick():
 
     rewards = np.array(rewards)
 
+    policy.save(f"results/bc_decoration_stick_policy.pkl")
+    exit()
     import pickle as pkl
     path = "results/bc_decoration_stick_rewards.pkl"
     with open(path, "wb") as f:
@@ -400,6 +412,6 @@ def airl_decoration_stick():
 
 if __name__ == "__main__":
     np.random.seed(0)
-    # bc_decoration_stick()
-    bc_single_task()
+    bc_decoration_stick()
+    # bc_single_task()
     # airl_decoration_stick()

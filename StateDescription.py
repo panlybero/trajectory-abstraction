@@ -99,7 +99,7 @@ class StateDescription:
 
         for generalization in generalizations:
 
-            if generalization.subsumes(self) and not generalization._check_contradiction_in_invented(invented_predicates):
+            if generalization.subsumes(self): #and not generalization._check_contradiction_in_invented(invented_predicates):
                 applicable_generalizations.append(generalization)
 
         if len(applicable_generalizations) == 0:
@@ -117,7 +117,7 @@ class StateDescription:
         return hash(tuple(sorted(self.predicates + list(self.invented_predicates))))
 
     def __repr__(self):
-        return f"StateDescription(pred={self.predicates}, invented={self.invented_predicates})"
+        return f"StateDescription(pred={self.predicates}, asserts={self.invented_predicates})"
 
     def compare_predicates(self, other):
 

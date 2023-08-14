@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle as pkl
@@ -64,9 +65,9 @@ def plot_invent_decoration_stick():
     plt.errorbar(x=range(expert.shape[1]), y=expert.mean(
         axis=0), yerr=expert.std(axis=0)/np.sqrt(expert.shape[0]), label='Expert', elinewidth=0.1)
     plt.errorbar(x=range(expert.shape[1]), y=invent.mean(axis=0), yerr=invent.std(
-        axis=0)/np.sqrt(expert.shape[0]), label='Agent Model w/ Invention', elinewidth=0.1)
+        axis=0)/np.sqrt(expert.shape[0]), label='Full Agent Model', elinewidth=0.1)
     plt.errorbar(x=range(expert.shape[1]), y=no_invent.mean(axis=0), yerr=no_invent.std(
-        axis=0)/np.sqrt(expert.shape[0]), label='Agent Model w/out Invention', elinewidth=0.1)
+        axis=0)/np.sqrt(expert.shape[0]), label='Base Agent Model', elinewidth=0.1)
 
     plt.errorbar(x=range(expert.shape[1]), y=bc.mean(axis=0), yerr=bc.std(
         axis=0)/np.sqrt(expert.shape[0]), label='Online Behavioral cloning', elinewidth=0.1)
@@ -77,7 +78,7 @@ def plot_invent_decoration_stick():
     plt.xlim(left=0, right=600)
     # plt.title("Average Reward per Episode for Decoration and Stick task")
     plt.suptitle("Average Reward per Episode for Decoration and Stick task")
-    plotpath = 'results/comparison_decoration_stick.png'
+    plotpath = 'results/comparison_decoration_stick_new.png'
     # plt.tight_layout()
     plt.savefig(plotpath, transparent=True, dpi=150)
 
@@ -153,6 +154,40 @@ def single_task_table():
         json.dump(res, f, indent=4)
 
 
+def plot_novelty_task():
+    with open("results/rewards_novelty_task_3_agents.json", "r") as f:
+        rewards = json.load(f)
+
+    names = {"expert": "Expert", "bc_agent": "Online BC",
+             "agent_model_agent": "Agent Model + IM", "agent_model_agent_noinvent": "Agent Model"}
+
+    for agent in rewards:
+        mean = np.array(rewards[agent]).mean(axis=0)
+        std = np.array(rewards[agent]).std(axis=0)/np.sqrt(len(rewards[agent]))
+        plt.errorbar(x=range(len(mean)), y=mean, yerr=std, label=names[agent])
+
+    plt.legend()
+    plt.xlabel('Episode')
+    plt.ylabel('Reward')
+    plt.title("Average Reward per Episode for Novelty Task")
+    plotpath = 'results/comparison_novelty_task.png'
+    plt.savefig(plotpath)
+
+
+def novelty_task_table():
+    crafting_goal = 'stick'
+    with open(f"results/rewards_novelty_task_{crafting_goal}_4_agents.json", "r") as f:
+        rewards = json.load(f)
+
+    names = {"expert": "Expert", "bc_agent": "Online BC",
+             "agent_model_agent": "Agent Model + IM", "agent_model_agent_noinvent": "Agent Model"}
+
+    for agent in rewards:
+        mean = np.array(rewards[agent]).mean()
+        std = np.array(rewards[agent]).std()/np.sqrt(len(rewards[agent][0]))
+        print(f"{names[agent]}: {mean:.2f} $\pm$ {std:.2f}")
+
+
 if __name__ == '__main__':
 
     # path = "results/bc_chair_decoration_rewards.pkl"
@@ -161,3 +196,5 @@ if __name__ == '__main__':
     plot_invent_decoration_stick()
     # plot_chair()
     # single_task_table()
+    # plot_novelty_task()
+    # novelty_task_table()

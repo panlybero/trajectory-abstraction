@@ -32,7 +32,7 @@ class Planner:
 
         try:
             process_out = subprocess.check_output(
-                cmd, timeout=1).decode('utf-8').splitlines()
+                cmd, timeout=2).decode('utf-8').splitlines()
         except subprocess.CalledProcessError as e:
             # print(problem_content)
             # print(e.output)
